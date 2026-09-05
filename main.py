@@ -4,16 +4,9 @@ from sentence_transformers import SentenceTransformer      # To generate Embeddi
 from sklearn.metrics.pairwise import cosine_similarity     # To get Similarity Score of Resume and Job Description
 from openai import OpenAI                             # API to use LLM's
 import re                                         # To perform Regular Expression Functions
-from dotenv import load_dotenv                    # Loading API Key from .env file
-import os
 
 
-# Load environment variables from .env
-load_dotenv()
-
-# Fetch the key from the environment
-api_key = os.getenv("GEMINI_API_KEY")
-
+api_key = st.secrets["GEMINI_API_KEY"]
 #  Session States to store values 
 if "form_submitted" not in st.session_state:
     st.session_state.form_submitted = False
