@@ -1,172 +1,401 @@
-import streamlit as st                            # For Web Interface (Front-End)
-from pdfminer.high_level import extract_text      # To Extract Text from Resume PDF
-from sentence_transformers import SentenceTransformer      # To generate Embeddings of text
-from sklearn.metrics.pairwise import cosine_similarity     # To get Similarity Score of Resume and Job Description
-from openai import OpenAI                             # API to use LLM's
-import re                                         # To perform Regular Expression Functions
+import streamlit as st
+from pdfminer.high_level import extract_text
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from openai import OpenAI
+import re
 
+
+# =========================
+# PAGE CONFIG
+# =========================
+
+st.set_page_config(
+    page_title="AI Resume Analyzer",
+    page_icon="📝",
+    layout="wide"
+)
+
+
+# =========================
+# API KEY
+# =========================
 
 api_key = st.secrets["GEMINI_API_KEY"]
-#  Session States to store values 
+
+
+# =========================
+# SESSION STATE
+# =========================
+
 if "form_submitted" not in st.session_state:
     st.session_state.form_submitted = False
 
 if "resume" not in st.session_state:
-    st.session_state.resume=""
+    st.session_state.resume = ""
 
 if "job_desc" not in st.session_state:
-    st.session_state.job_desc=""
+    st.session_state.job_desc = ""
 
 
+# =========================
+# TITLE
+# =========================
 
-# Title of the Project, change according to your style
 st.title("AI Resume Analyzer 📝")
+st.caption("Analyze your resume against a job description using AI + ATS similarity.")
 
 
+# =========================
+# LOAD ATS MODEL
+# =========================
 
-# <------- Defining Functions ------->
+@st.cache_resource
+def load_ats_model():
+    return SentenceTransformer(
+        "sentence-transformers/all-mpnet-base-v2"
+    )
 
-# Function to extract text from PDF
+
+# =========================
+# PDF TEXT EXTRACTION
+# =========================
+
 def extract_pdf_text(uploaded_file):
+
     try:
         extracted_text = extract_text(uploaded_file)
+
+        if not extracted_text.strip():
+            st.error(
+                "PDF se text extract nahi ho paya. "
+                "Please check that your PDF contains selectable text."
+            )
+            return ""
+
         return extracted_text
+
     except Exception as e:
-        st.error(f"Error extracting text from PDF: {str(e)}")
-        return "Could not extract text from the PDF file."
+
+        st.error("Error extracting text from PDF.")
+        st.exception(e)
+
+        return ""
 
 
-# Function to calculate similarity 
+# =========================
+# ATS SIMILARITY
+# =========================
+
 def calculate_similarity_bert(text1, text2):
-    ats_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')      # Use BERT or SBERT or any model you want
-    # Encode the texts directly to embeddings
-    embeddings1 = ats_model.encode([text1])
-    embeddings2 = ats_model.encode([text2])
-    
-    # Calculate cosine similarity without adding an extra list layer
-    similarity = cosine_similarity(embeddings1, embeddings2)[0][0]
-    return similarity
+
+    try:
+
+        ats_model = load_ats_model()
+
+        embeddings1 = ats_model.encode([text1])
+        embeddings2 = ats_model.encode([text2])
+
+        similarity = cosine_similarity(
+            embeddings1,
+            embeddings2
+        )[0][0]
+
+        return float(similarity)
+
+    except Exception as e:
+
+        st.error("ATS similarity calculation failed.")
+        st.exception(e)
+
+        return 0.0
 
 
-def get_report(resume,job_desc): 
+# =========================
+# GEMINI AI REPORT
+# =========================
+
+def get_report(resume, job_desc):
+
     client = OpenAI(
         api_key=api_key,
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
     )
 
-    # Change the prompt to get the results in your style
-    prompt=f"""
-    # Context:
-    - You are an AI Resume Analyzer, you will be given Candidate's resume and Job Description of the role he is applying for.
+    prompt = f"""
+You are an expert AI Resume Analyzer and ATS consultant.
 
-    # Instruction:
-    - Analyze candidate's resume based on the possible points that can be extracted from job description,and give your evaluation on each point with the criteria below:  
-    - Consider all points like required skills, experience,etc that are needed for the job role.
-    - Calculate the score to be given (out of 5) for every point based on evaluation at the beginning of each point with a detailed explanation.  
-    - If the resume aligns with the job description point, mark it with ✅ and provide a detailed explanation.  
-    - If the resume doesn't align with the job description point, mark it with ❌ and provide a reason for it.  
-    - If a clear conclusion cannot be made, use a ⚠️ sign with a reason.  
-    - The Final Heading should be "Suggestions to improve your resume:" and give where and what the candidate can improve to be selected for that job role.
+Analyze the candidate's resume against the provided job description.
 
-    # Inputs:
-    Candidate Resume: {resume}
-    ---
-    Job Description: {job_desc}
+Consider:
 
-    # Output:
-    - Each any every point should be given a score (example: 3/5 ). 
-    - Mention the scores and  relevant emoji at the beginning of each point and then explain the reason.
-    """
+- Required skills
+- Technical skills
+- Education
+- Experience
+- Projects
+- Certifications
+- Responsibilities
+- Tools and technologies
+- Relevant keywords
+- Other important requirements
 
-    chat_completion = client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="gemini-3.8-flash",
-    )
-    return chat_completion.choices[0].message.content
+For every important requirement:
+
+1. Give a score out of 5.
+2. Put the score at the beginning.
+3. Use:
+   ✅ = Resume aligns with the requirement
+   ❌ = Resume does not align with the requirement
+   ⚠️ = Cannot clearly determine from the resume
+4. Explain the reason clearly.
+
+At the end provide:
+
+Suggestions to improve your resume:
+
+Give practical suggestions that can improve the candidate's chances
+of matching this job description.
+
+IMPORTANT:
+Do not invent experience, skills, education or certifications that are
+not present in the resume.
+
+OUTPUT FORMAT:
+
+3/5 ✅ Technical Skills
+
+Explanation...
+
+4/5 ⚠️ Experience
+
+Explanation...
+
+2/5 ❌ Education
+
+Explanation...
+
+Suggestions to improve your resume:
+
+- Suggestion 1
+- Suggestion 2
+- Suggestion 3
+
+
+========================
+CANDIDATE RESUME
+========================
+
+{resume}
+
+
+========================
+JOB DESCRIPTION
+========================
+
+{job_desc}
+"""
+
+    try:
+
+        response = client.chat.completions.create(
+            model="gemini-3.6-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        if response.choices:
+            return response.choices[0].message.content
+
+        return ""
+
+    except Exception as e:
+
+        st.error("Gemini API Error")
+        st.exception(e)
+
+        return ""
+
+
+# =========================
+# EXTRACT SCORES
+# =========================
 
 def extract_scores(text):
-    # Regular expression pattern to find scores in the format x/5, where x can be an integer or a float
-    pattern = r'(\d+(?:\.\d+)?)/5'
-    # Find all matches in the text
+
+    if not text:
+        return []
+
+    pattern = r"(\d+(?:\.\d+)?)/5"
+
     matches = re.findall(pattern, text)
-    # Convert matches to floats
-    scores = [float(match) for match in matches]
+
+    scores = [
+        float(match)
+        for match in matches
+        if 0 <= float(match) <= 5
+    ]
+
     return scores
 
 
+# =========================
+# MAIN FORM
+# =========================
 
-
-# <--------- Starting the Work Flow ---------> 
-
-# Displays Form only if the form is not submitted
 if not st.session_state.form_submitted:
-    with st.form("my_form"):
 
-        # Taking input a Resume (PDF) file 
-        resume_file = st.file_uploader(label="Upload your Resume/CV in PDF format", type="pdf")
+    st.subheader("Upload Your Resume")
 
-        # Taking input Job Description
-        st.session_state.job_desc = st.text_area("Enter the Job Description of the role you are applying for:",placeholder="Job Description...")
+    with st.form("resume_form"):
 
-        # Form Submission Button
-        submitted = st.form_submit_button("Analyze")
+        resume_file = st.file_uploader(
+            "Upload Resume / CV",
+            type=["pdf"]
+        )
+
+        job_desc = st.text_area(
+            "Enter Job Description",
+            placeholder="Paste the complete job description here...",
+            height=250
+        )
+
+        submitted = st.form_submit_button(
+            "🚀 Analyze Resume",
+            use_container_width=True
+        )
+
         if submitted:
 
-            #  Allow only if Both Resume and Job Description are Submitted
-            if st.session_state.job_desc and resume_file:
-                st.info("Extracting Information")
+            if not resume_file or not job_desc.strip():
 
-                st.session_state.resume = extract_pdf_text(resume_file)      # Calling the function to extract text from Resume
+                st.warning(
+                    "Please upload your resume and enter the job description."
+                )
 
-                st.session_state.form_submitted = True
-                st.rerun()                 # Refresh the page to close the form and give results
-
-            # Donot allow if not uploaded
             else:
-                st.warning("Please Upload both Resume and Job Description to analyze")
 
+                with st.spinner("Extracting resume information..."):
+
+                    resume_text = extract_pdf_text(resume_file)
+
+                if resume_text:
+
+                    st.session_state.resume = resume_text
+                    st.session_state.job_desc = job_desc
+                    st.session_state.form_submitted = True
+
+                    st.rerun()
+
+
+# =========================
+# ANALYSIS PAGE
+# =========================
 
 if st.session_state.form_submitted:
-    score_place = st.info("Generating Scores...")
 
-    # Call the function to get ATS Score
-    ats_score = calculate_similarity_bert(st.session_state.resume,st.session_state.job_desc)
+    st.subheader("📊 Resume Analysis")
 
-    col1,col2 = st.columns(2,border=True)
+    # ATS SCORE
+    with st.spinner("Calculating ATS similarity..."):
+
+        ats_score = calculate_similarity_bert(
+            st.session_state.resume,
+            st.session_state.job_desc
+        )
+
+    # AI REPORT
+    with st.spinner("Generating AI analysis..."):
+
+        report = get_report(
+            st.session_state.resume,
+            st.session_state.job_desc
+        )
+
+    # Extract scores
+    report_scores = extract_scores(report)
+
+    if report_scores:
+
+        avg_score = sum(report_scores) / len(report_scores)
+
+    else:
+
+        avg_score = 0
+
+
+    # =========================
+    # SCORE CARDS
+    # =========================
+
+    col1, col2 = st.columns(2)
+
     with col1:
-        st.write("Few ATS uses this score to shortlist candidates, Similarity Score:")
-        st.subheader(str(ats_score))
 
-    # Call the function to get the Analysis Report from LLM (Groq)
-    report = get_report(st.session_state.resume,st.session_state.job_desc)
-
-    # Calculate the Average Score from the LLM Report
-    report_scores = extract_scores(report)                 # Example : [3/5, 4/5, 5/5,...]
-    avg_score = sum(report_scores) / (5*len(report_scores))  # Example: 2.4
-
+        st.metric(
+            "ATS Similarity Score",
+            f"{ats_score * 100:.1f}%"
+        )
 
     with col2:
-        st.write("Total Average score according to our AI report:")
-        st.subheader(str(avg_score))
-    score_place.success("Scores generated successfully!")
 
-
-    st.subheader("AI Generated Analysis Report:")
-
-    # Displaying Report 
-    st.markdown(f"""
-            <div style='text-align: left; background-color: #000000; padding: 10px; border-radius: 10px; margin: 5px 0;'>
-                {report}
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Download Button
-    st.download_button(
-        label="Download Report",
-        data=report,
-        file_name="report.txt",
-        icon=":material/download:",
+        st.metric(
+            "AI Resume Score",
+            f"{avg_score / 5 * 100:.1f}%"
         )
-    
 
-# <-------------- End of the Work Flow --------------->
+
+    st.divider()
+
+
+    # =========================
+    # AI REPORT
+    # =========================
+
+    st.subheader("🤖 AI Generated Analysis")
+
+    if report:
+
+        st.markdown(report)
+
+    else:
+
+        st.error(
+            "AI report generate nahi hua. "
+            "Please check your Gemini API key and model configuration."
+        )
+
+
+    # =========================
+    # DOWNLOAD
+    # =========================
+
+    if report:
+
+        st.download_button(
+            label="⬇️ Download Report",
+            data=report,
+            file_name="resume_analysis_report.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+
+    # =========================
+    # NEW ANALYSIS
+    # =========================
+
+    if st.button(
+        "🔄 Analyze Another Resume",
+        use_container_width=True
+    ):
+
+        st.session_state.form_submitted = False
+        st.session_state.resume = ""
+        st.session_state.job_desc = ""
+
+        st.rerun()
